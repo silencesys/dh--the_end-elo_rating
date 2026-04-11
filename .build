@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Config
+# Override any of these via environment variables for forks:
+#   REGISTRY=ghcr.io OWNER=your-username REPO=your-repo ./.build
+REGISTRY="${REGISTRY:-ghcr.io}"
+OWNER="${OWNER:-silencesys}"
+REPO="${REPO:-dh--elo-rating}"
+IMAGE="${REGISTRY_IMAGE:-${REGISTRY}/${OWNER}/${REPO}}"
+
+# Read version from server/package.json (authoritative version source)
+VERSION="$(node -e "process.stdout.write(require('./server/package.json').version)")"
+
+PLATFORM="${PLATFORM:-linux/amd64}"
+
+# ── Build
+echo "Building ${IMAGE}:${VERSION} …"
+
+docker buildx build \
+  --platform "${PLATFORM}" \
+  --tag "${IMAGE}:${VERSION}" \
+  --tag "${IMAGE}:latest" \
+  --provenance=false \
+  --push \
+  .
+
+echo ""
+echo "Published:"
+echo "  ${IMAGE}:${VERSION}"
+echo "  ${IMAGE}:latest"

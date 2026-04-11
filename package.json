@@ -1,0 +1,13 @@
+{
+  "name": "elo-rating",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"pnpm -C server dev\" \"pnpm -C client dev\"",
+    "build": "pnpm -C client build",
+    "start": "pnpm -C server start",
+    "migrate": "node scripts/migrate-legacy-sessions.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,18 @@
+# development tooling
+node_modules
+**/node_modules
+
+# build output
+client/dist
+**/dist
+
+# env files (pass secrets at runtime)
+.env
+.env.*
+!.env.example
+
+# git & editor
+.git
+.gitignore
+.DS_Store
+*.log
