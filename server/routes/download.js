@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
 const Image = require('../models/Image');
+const Session = require('../models/Session');
 
 const router = Router();
 
@@ -12,7 +13,10 @@ const router = Router();
 //   images/           — full-resolution image files
 router.get('/', async (req, res) => {
   try {
-    const images = await Image.find({}, { __v: 0 }).sort({ eloRating: -1 }).lean();
+    const [images, sessions] = await Promise.all([
+      Image.find({}, { __v: 0 }).sort({ eloRating: -1 }).lean(),
+      Session.find({}).sort({ startedAt: 1 }).lean(),
+    ]);
 
     const imagesDir = path.join(__dirname, '../../images');
 
@@ -53,6 +57,55 @@ router.get('/', async (req, res) => {
       2
     );
     archive.append(json, { name: 'elo-ratings.json' });
+
+    // Build sessions export
+    const imageIds = new Set();
+    for (const s of sessions) {
+      for (const c of s.comparisons) {
+        if (c.winnerId) imageIds.add(String(c.winnerId));
+        if (c.loserId)  imageIds.add(String(c.loserId));
+      }
+    }
+    const imageRecords = await Image.find({ _id: { $in: [...imageIds] } }, { filename: 1, name: 1 }).lean();
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const imageMap = {};
+    for (const img of imageRecords) {
+      imageMap[String(img._id)] = { shelfmark: img.name, url: `${baseUrl}/images/${img.filename}` };
+    }
+
+    const sessionsJson = JSON.stringify(
+      {
+        sessions: sessions.map((s) => ({
+          sessionID:    String(s._id),
+          user:         s.username,
+          source:       s.source ?? null,
+          timestamp:    s.startedAt ? s.startedAt.toISOString() : null,
+          completed:    s.completedAt !== null,
+          combinations: s.comparisons.map((c) => {
+            const winner = c.winnerId ? imageMap[String(c.winnerId)] : null;
+            const loser  = c.loserId  ? imageMap[String(c.loserId)]  : null;
+            if (c.skipped) {
+              return {
+                entropyRated:  false,
+                isCalibration: c.isCalibration,
+                folio1: winner ? { ...winner, position: c.winnerPosition } : null,
+                folio2: loser  ? { ...loser,  position: c.loserPosition  } : null,
+              };
+            }
+            return {
+              entropyRated:        true,
+              isCalibration:       c.isCalibration,
+              thinkingTime:        c.thinkingTime,
+              winnerHigherEntropy: winner ? { ...winner, position: c.winnerPosition } : null,
+              loserLowerEntropy:   loser  ? { ...loser,  position: c.loserPosition  } : null,
+            };
+          }),
+        })),
+      },
+      null,
+      2
+    );
+    archive.append(sessionsJson, { name: `sessions_${timestamp}.json` });
 
     archive.directory(imagesDir, 'images');
 

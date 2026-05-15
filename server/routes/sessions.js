@@ -11,7 +11,10 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'username is required.' });
   }
   try {
-    const session = await Session.create({ username: username.trim() });
+    const session = await Session.create({
+      username: username.trim(),
+      source: (typeof req.body.source === 'string' && req.body.source.trim()) ? req.body.source.trim() : null,
+    });
     res.status(201).json({ sessionId: session._id });
   } catch (err) {
     console.error('POST /api/sessions error:', err.message);
@@ -95,6 +98,7 @@ router.get('/', async (req, res) => {
       const formatted = sessions.map((s) => ({
         sessionID:    String(s._id),
         user:         s.username,
+        source:       s.source ?? null,
         timestamp:    s.startedAt ? s.startedAt.toISOString() : null,
         completed:    s.completedAt !== null,
         combinations: s.comparisons.map((c) => {

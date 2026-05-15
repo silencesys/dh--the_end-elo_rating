@@ -17,6 +17,7 @@ const comparisonEntrySchema = new mongoose.Schema(
 const sessionSchema = new mongoose.Schema(
   {
     username:    { type: String, required: true, trim: true, maxlength: 100 },
+    source:      { type: String, default: null },
     startedAt:   { type: Date,   default: Date.now },
     completedAt: { type: Date,   default: null },
     durationMs:  { type: Number, default: null },

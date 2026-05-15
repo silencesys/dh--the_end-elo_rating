@@ -12,10 +12,11 @@ export function useSession() {
 
   const openSession = useCallback(async (name) => {
     try {
+      const source = new URLSearchParams(window.location.search).get('source') || null;
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: name }),
+        body: JSON.stringify({ username: name, source }),
       });
       const data = await res.json();
       const sid = data.sessionId ?? null;
