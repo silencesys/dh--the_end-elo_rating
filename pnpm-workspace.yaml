@@ -1,6 +1,7 @@
 packages:
-  - 'server'
-  - 'client'
+  - server
+  - client
 allowBuilds:
   esbuild: false
   sharp: true
+minReleaseAge: 7d

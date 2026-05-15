@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const Session = require('../models/Session');
+const Image = require('../models/Image');
 
 const router = Router();
 
@@ -66,10 +67,61 @@ router.post('/:id/skip', async (req, res) => {
   }
 });
 
-// GET /api/sessions?format=json|csv
+// GET /api/sessions?format=json|csv|sessions
 router.get('/', async (req, res) => {
   try {
-    const sessions = await Session.find({}).sort({ startedAt: -1 }).lean();
+    const sessions = await Session.find({}).sort({ startedAt: 1 }).lean();
+
+    if (req.query.format === 'sessions') {
+      // Collect all image IDs referenced across all comparisons
+      const imageIds = new Set();
+      for (const s of sessions) {
+        for (const c of s.comparisons) {
+          if (c.winnerId) imageIds.add(String(c.winnerId));
+          if (c.loserId)  imageIds.add(String(c.loserId));
+        }
+      }
+
+      const images = await Image.find({ _id: { $in: [...imageIds] } }, { filename: 1, name: 1 }).lean();
+      const imageMap = {};
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      for (const img of images) {
+        imageMap[String(img._id)] = {
+          shelfmark: img.name,
+          url: `${baseUrl}/images/${img.filename}`,
+        };
+      }
+
+      const formatted = sessions.map((s) => ({
+        sessionID:    String(s._id),
+        user:         s.username,
+        timestamp:    s.startedAt ? s.startedAt.toISOString() : null,
+        completed:    s.completedAt !== null,
+        combinations: s.comparisons.map((c) => {
+          const winner = c.winnerId ? imageMap[String(c.winnerId)] : null;
+          const loser  = c.loserId  ? imageMap[String(c.loserId)]  : null;
+
+          if (c.skipped) {
+            return {
+              entropyRated:  false,
+              isCalibration: c.isCalibration,
+              folio1: winner ? { ...winner, position: c.winnerPosition } : null,
+              folio2: loser  ? { ...loser,  position: c.loserPosition  } : null,
+            };
+          }
+
+          return {
+            entropyRated:         true,
+            isCalibration:        c.isCalibration,
+            thinkingTime:         c.thinkingTime,
+            winnerHigherEntropy:  winner ? { ...winner, position: c.winnerPosition } : null,
+            loserLowerEntropy:    loser  ? { ...loser,  position: c.loserPosition  } : null,
+          };
+        }),
+      }));
+
+      return res.json({ sessions: formatted });
+    }
 
     if (req.query.format === 'csv') {
       const rows = [
