@@ -1,6 +1,7 @@
 {
   "name": "elo-rating",
   "private": true,
+  "version": "1.0.1",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"pnpm -C server dev\" \"pnpm -C client dev\"",
     "build": "pnpm -C client build",
