@@ -9,6 +9,7 @@ const compareRoutes       = require('./routes/compare');
 const sessionRoutes       = require('./routes/sessions');
 const downloadRoutes      = require('./routes/download');
 const distributionRoutes  = require('./routes/distributions');
+const uploadRoutes        = require('./routes/upload');
 
 const { recomputeAndPersist } = require('./elo');
 
@@ -30,6 +31,7 @@ app.use('/api/compare',       compareRoutes);
 app.use('/api/sessions',      sessionRoutes);
 app.use('/api/download',      downloadRoutes);
 app.use('/api/distributions', distributionRoutes);
+app.use('/api/upload-images', uploadRoutes);
 
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (_req, res) => {

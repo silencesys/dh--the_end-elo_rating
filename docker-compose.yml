@@ -38,7 +38,7 @@ services:
       NODE_ENV: production
       MONGODB_URI: mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@mongo:27017/elo-rating?authSource=elo-rating
     volumes:
-      - ./images:/app/images:ro
+      - ./images:/app/images
       - previews:/app/previews
 
 volumes:
