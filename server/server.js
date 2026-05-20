@@ -1,5 +1,6 @@
 require('dotenv').config({ path: '../.env' });
 const express = require('express');
+const cors = require('cors');
 const path = require('path');
 const { connect } = require('./db');
 
@@ -14,6 +15,18 @@ const uploadRoutes        = require('./routes/upload');
 const { recomputeAndPersist } = require('./elo');
 
 const app = express();
+
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: allowedOrigins.length ? allowedOrigins : false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-api-key'],
+}));
+
 app.use(express.json());
 
 app.use('/images',   express.static(path.join(__dirname, '../images')));
