@@ -1,12 +1,7 @@
 const mongoose = require('mongoose');
-const { seedImages, generatePreviews } = require('./startup');
+const { runStartup } = require('./startup');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/elo-rating';
-
-mongoose.connection.once('open', () => {
-  seedImages().catch((err) => console.error('Seeding error:', err.message));
-  generatePreviews().catch((err) => console.error('Preview generation error:', err.message));
-});
 
 function connect() {
   return mongoose
@@ -18,4 +13,9 @@ function connect() {
     });
 }
 
-module.exports = { connect };
+async function connectAndPrepare() {
+  await connect();
+  await runStartup();
+}
+
+module.exports = { connect, connectAndPrepare };

@@ -29,8 +29,13 @@ function sample(arr, n) {
   return copy.slice(0, n);
 }
 
+function getDefaultUsername() {
+  const username = new URLSearchParams(window.location.search).get('username') || '';
+  return username.trim().slice(0, 50);
+}
+
 export default function LoginModal({ config, images = [], onLogin }) {
-  const [value, setValue] = useState('');
+  const [value, setValue] = useState(getDefaultUsername);
   const [readOnly, setReadOnly] = useState(true);
   const inputRef = useRef(null);
 
@@ -43,8 +48,6 @@ export default function LoginModal({ config, images = [], onLogin }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const bgImages = useMemo(() => [...col1, ...col2, ...col3, ...col4, ...col5], [col1, col2, col3, col4, col5]);
-
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -53,7 +56,7 @@ export default function LoginModal({ config, images = [], onLogin }) {
     e.preventDefault();
     const name = value.trim();
     if (!name) return;
-    onLogin(name, bgImages.map((img) => String(img._id)));
+    onLogin(name);
   }
 
   return (

@@ -2,102 +2,132 @@ export function getPairKey(id1, id2) {
   return [String(id1), String(id2)].sort().join('|');
 }
 
-/**
- * Classify images as "new" (underrepresented) vs "established".
- *
- * "New" = comparisons count is at or below the 25th percentile of the full
- * collection.  When the spread across all images is ≤ 5 comparisons (e.g. a
- * fresh database where everyone is roughly even), every image is treated as
- * new so behaviour degrades gracefully to the unweighted case.
- */
-function classifyImages(images) {
-  const sorted = [...images].sort((a, b) => a.comparisons - b.comparisons);
-  const minC   = sorted[0].comparisons;
-  const maxC   = sorted[sorted.length - 1].comparisons;
+/** Minimum per-image comparisons before an image is treated as a ranked anchor. */
+export const ANCHOR_THRESHOLD = 5;
 
-  if (maxC - minC <= 5) {
-    const newSet = new Set(images.map((img) => String(img._id)));
-    return newSet;
-  }
+/** After this many consecutive non-anchor pairs, the next pick must be anchor × anchor. */
+export const ANCHOR_PAIR_EVERY = 5;
 
-  const q1C    = sorted[Math.floor(sorted.length * 0.25)].comparisons;
-  const newSet = new Set(
-    sorted.filter((img) => img.comparisons <= q1C).map((img) => String(img._id))
-  );
-  return newSet;
+const LOW_COMP_TOLERANCE = 2;
+
+export function isAnchor(img) {
+  return img.comparisons >= ANCHOR_THRESHOLD;
 }
 
-/**
- * Pick the next image pair to show.
- *
- * Strategy:
- *   Images are split into "new" (bottom-25th-percentile by comparisons) and
- *   "established".  Candidate pairs are ordered into four tiers:
- *
- *   Tier 1 — contains ≥1 new image AND avoids images from the last trial
- *   Tier 2 — contains ≥1 new image (may reuse a last-shown image)
- *   Tier 3 — established × established, avoids last trial  ← occasional
- *   Tier 4 — established × established (last resort)
- *
- *   With probability ESTABLISHED_CHANCE the algorithm skips to tier 3/4 so
- *   that well-ranked images keep receiving comparisons for re-calibration.
- *   Otherwise tier 1 → tier 2 → tier 3 → tier 4 in order.
- *
- *   Within the chosen tier, prefer the pair(s) with the lowest combined
- *   comparisons count (within a tolerance of 2), then pick randomly.
- *   Left/right position is randomised.
- */
-const ESTABLISHED_CHANCE = 0.15; // ~1-in-7 comparisons uses an established pair
+export function isAnchorPair(pair) {
+  return isAnchor(pair[0]) && isAnchor(pair[1]);
+}
 
-export function pickNextPair(images, ratedPairIds, lastShownIds) {
-  if (images.length < 2) return null;
+/** One cold (under-sampled) image paired with one anchor. */
+function isColdAnchorPair(pair) {
+  const a = isAnchor(pair[0]);
+  const b = isAnchor(pair[1]);
+  return (a && !b) || (!a && b);
+}
 
-  const newSet = classifyImages(images);
-  const isNew  = (img) => newSet.has(String(img._id));
+function combinedComparisons(pair) {
+  return pair[0].comparisons + pair[1].comparisons;
+}
 
-  const t1 = []; // ≥1 new, avoids last shown  ← primary
-  const t2 = []; // ≥1 new, may repeat last    ← secondary
-  const t3 = []; // established×established, avoids last shown
-  const t4 = []; // established×established, may repeat last
+function avoidsLast(pair, lastShownIds) {
+  return (
+    !lastShownIds.includes(String(pair[0]._id)) &&
+    !lastShownIds.includes(String(pair[1]._id))
+  );
+}
 
+function allUnratedPairs(images, ratedPairIds) {
+  const pairs = [];
   for (let i = 0; i < images.length; i++) {
     for (let j = i + 1; j < images.length; j++) {
       const a = images[i];
       const b = images[j];
-      if (ratedPairIds.has(getPairKey(a._id, b._id))) continue;
-
-      const hasNew     = isNew(a) || isNew(b);
-      const avoidsLast =
-        !lastShownIds.includes(String(a._id)) &&
-        !lastShownIds.includes(String(b._id));
-
-      if      (hasNew  && avoidsLast) t1.push([a, b]);
-      else if (hasNew)                t2.push([a, b]);
-      else if (avoidsLast)            t3.push([a, b]);
-      else                            t4.push([a, b]);
+      if (!ratedPairIds.has(getPairKey(a._id, b._id))) pairs.push([a, b]);
     }
   }
+  return pairs;
+}
 
-  const hasEstablished = t3.length > 0 || t4.length > 0;
-  let pool;
-  if (hasEstablished && Math.random() < ESTABLISHED_CHANCE) {
-    pool = t3.length > 0 ? t3 : t4;
-  } else if (t1.length > 0) pool = t1;
-  else if (t2.length > 0)   pool = t2;
-  else if (t3.length > 0)   pool = t3;
-  else if (t4.length > 0)   pool = t4;
-  else return null;
+function hasAnchors(images) {
+  return images.some(isAnchor);
+}
 
-  pool.sort(
-    (pa, pb) =>
-      pa[0].comparisons + pa[1].comparisons -
-      (pb[0].comparisons + pb[1].comparisons)
+function allImagesAnchored(images) {
+  return images.every(isAnchor);
+}
+
+function pickFromPool(candidates, lastShownIds) {
+  if (!candidates.length) return null;
+
+  const withAvoid = candidates.filter((p) => avoidsLast(p, lastShownIds));
+  const pool = withAvoid.length ? withAvoid : candidates;
+
+  pool.sort((a, b) => combinedComparisons(a) - combinedComparisons(b));
+  const min = combinedComparisons(pool[0]);
+  const lowest = pool.filter(
+    (p) => combinedComparisons(p) <= min + LOW_COMP_TOLERANCE
   );
-  const minComps   = pool[0][0].comparisons + pool[0][1].comparisons;
-  const lowestTier = pool.filter(
-    ([a, b]) => a.comparisons + b.comparisons <= minComps + 2
-  );
 
-  const pair = lowestTier[Math.floor(Math.random() * lowestTier.length)];
+  const pair = lowest[Math.floor(Math.random() * lowest.length)];
   return Math.random() < 0.5 ? pair : [pair[1], pair[0]];
+}
+
+/**
+ * Update the anchor-pair streak after the participant finishes the current pair.
+ */
+export function advancePicksSinceAnchorPair(currentPair, picksSinceAnchorPair) {
+  if (!currentPair) return picksSinceAnchorPair;
+  return isAnchorPair(currentPair) ? 0 : picksSinceAnchorPair + 1;
+}
+
+/**
+ * Coverage-first pair selection (Option B).
+ *
+ * - While some images are under-sampled, prefer cold × anchor pairs.
+ * - Prefer session-unrated pairs with the lowest combined comparison counts.
+ * - Every ANCHOR_PAIR_EVERY picks, require anchor × anchor for recalibration.
+ */
+export function pickNextPair(
+  images,
+  ratedPairIds,
+  lastShownIds,
+  picksSinceAnchorPair = 0
+) {
+  if (images.length < 2) return null;
+
+  const unrated = allUnratedPairs(images, ratedPairIds);
+  if (!unrated.length) return null;
+
+  const anchorPairs = unrated.filter(isAnchorPair);
+  const coldAnchorPairs = unrated.filter(isColdAnchorPair);
+
+  const mustAnchorPair =
+    picksSinceAnchorPair >= ANCHOR_PAIR_EVERY - 1 && anchorPairs.length > 0;
+
+  let pool;
+
+  if (mustAnchorPair) {
+    pool = anchorPairs;
+  } else if (!allImagesAnchored(images) && hasAnchors(images)) {
+    pool = coldAnchorPairs.length
+      ? coldAnchorPairs
+      : unrated.filter((p) => isAnchor(p[0]) || isAnchor(p[1]));
+    if (!pool.length) pool = unrated;
+  } else if (!hasAnchors(images)) {
+    pool = unrated;
+  } else {
+    pool = coldAnchorPairs.length ? coldAnchorPairs : unrated;
+  }
+
+  if (!pool.length) pool = anchorPairs.length ? anchorPairs : unrated;
+
+  return pickFromPool(pool, lastShownIds);
+}
+
+/**
+ * Streak value to store after a newly selected pair is assigned to the UI.
+ */
+export function picksSinceAnchorPairAfterSelect(pair, streakUsedForPick) {
+  if (!pair) return streakUsedForPick;
+  return isAnchorPair(pair) ? 0 : streakUsedForPick + 1;
 }

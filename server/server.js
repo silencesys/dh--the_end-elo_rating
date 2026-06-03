@@ -2,7 +2,7 @@ require('dotenv').config({ path: '../.env' });
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { connect } = require('./db');
+const { connectAndPrepare } = require('./db');
 
 const configRoutes        = require('./routes/config');
 const imagesRoutes        = require('./routes/images');
@@ -36,8 +36,6 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/dist')));
 }
 
-connect();
-
 app.use('/api/config',        configRoutes);
 app.use('/api/images',        imagesRoutes);
 app.use('/api/compare',       compareRoutes);
@@ -53,14 +51,31 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
-app.listen(PORT, async () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  try {
-    const K        = parseInt(process.env.ELO_K_FACTOR  || '100', 10);
-    const nReplays = parseInt(process.env.ELO_N_REPLAYS || '100', 10);
-    await recomputeAndPersist(K, nReplays);
-    console.log(`ELO ratings recomputed (K=${K}, n=${nReplays} replays)`);
-  } catch (err) {
-    console.warn('Startup ELO recompute failed:', err.message);
-  }
-});
+
+connectAndPrepare()
+  .then(() => {
+    const server = app.listen(PORT, async () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+      try {
+        const K        = parseInt(process.env.ELO_K_FACTOR  || '100', 10);
+        const nReplays = parseInt(process.env.ELO_N_REPLAYS || '100', 10);
+        await recomputeAndPersist(K, nReplays);
+        console.log(`ELO ratings recomputed (K=${K}, n=${nReplays} replays)`);
+      } catch (err) {
+        console.warn('Startup ELO recompute failed:', err.message);
+      }
+    });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(
+          `Port ${PORT} is already in use. Stop the other process (e.g. lsof -i :${PORT}) or set PORT in .env.`
+        );
+        process.exit(1);
+      }
+      throw err;
+    });
+  })
+  .catch((err) => {
+    console.error('Startup failed:', err.message);
+    process.exit(1);
+  });

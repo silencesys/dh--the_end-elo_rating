@@ -40,7 +40,8 @@ export function useAppData() {
           const freshById = Object.fromEntries(
             fresh.map((img) => [String(img._id), img])
           );
-          return prev.map((img) => {
+          const prevIds = new Set(prev.map((img) => String(img._id)));
+          const merged = prev.map((img) => {
             const f = freshById[String(img._id)];
             if (!f) return img;
             // Keep local comparisons/wins counts if they are ahead of the
@@ -51,6 +52,10 @@ export function useAppData() {
               wins: Math.max(f.wins, img.wins),
             };
           });
+          for (const img of fresh) {
+            if (!prevIds.has(String(img._id))) merged.push(img);
+          }
+          return merged;
         });
       })
       .catch((err) => console.warn('Background image refresh failed:', err));

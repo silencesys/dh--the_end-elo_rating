@@ -46,16 +46,14 @@ Default: K = 100, N replays = 100, starting rating = 1500.
 
 ## Pair selection
 
-The pair selection algorithm uses a four-tier priority system designed to ensure new images are rated quickly while still producing meaningful comparisons:
+Coverage-first scheduling with an **anchor backbone** (`client/src/utils/pairSelection.js`):
 
-- **Tier 1** — at least one new (under-compared) image, avoids the pair shown on the previous trial (reduces carry-over bias)
-- **Tier 2** — at least one new image (no repeat constraint)
-- **Tier 3** — established × established pair, avoids the previous pair (~15% weight)
-- **Tier 4** — established × established, last resort
+- **Anchor** — image with at least 5 comparisons (configurable via `ANCHOR_THRESHOLD`).
+- **Coverage phase** — while any image is below that threshold, prefer **cold × anchor** pairs (one under-sampled image vs one stable reference).
+- **Session-unrated pairs** — pairs not yet shown in the current session are preferred; among those, lowest combined comparison count wins (tolerance of 2), with random tie-break.
+- **Recalibration** — at least one **anchor × anchor** pair every 5 picks (`ANCHOR_PAIR_EVERY`) so established rankings keep receiving direct comparisons.
 
-Within each tier, the pair with the lowest combined comparison count (within a tolerance of 2) is preferred.
-
-An image is classified as "new" if its comparison count is at or below the 25th percentile of all images. If the spread between the most- and least-compared image is ≤ 5, all images are treated as equal.
+The previous trial’s images are avoided when possible to reduce carry-over bias.
 
 ---
 
@@ -73,7 +71,7 @@ An image is classified as "new" if its comparison count is at or below the 25th 
 │   ├── elo.js           # Shared batch ELO computation module
 │   ├── models/          # Mongoose schemas (Image, Session)
 │   ├── routes/          # API handlers (compare, images, sessions, distributions, …)
-│   └── startup.js       # Preview generation on server start
+│   └── startup.js       # Image compression, DB seeding, previews on start
 ├── scripts/             # One-off utility scripts
 │   └── migrate-legacy-sessions.js
 ├── images/              # Source images (mounted as a volume in production)
@@ -119,7 +117,7 @@ All options are set via environment variables. Copy `.env.example` to `.env` and
 | `QUESTION` | `Which image do you prefer?` | Comparison question shown to participants |
 | `QUESTION_DESCRIPTION` | _(empty)_ | Optional description below the question |
 | `TIME_PER_COMPARISON` | `5000` | Milliseconds before a pair auto-advances |
-| `PRELOAD_COUNT` | `6` | Upcoming pairs to preload. `0` = preload all at startup |
+| `PRELOAD_COUNT` | `6` | Look-ahead pairs to preload after each trial. On login, at least 4 pairs (first trial + queue) are preloaded using the same selection algorithm |
 | `ELO_K_FACTOR` | `100` | ELO K-factor — higher values mean larger rating shifts per comparison |
 | `ELO_N_REPLAYS` | `100` | Number of shuffle-replays per recomputation — higher values reduce variance |
 | `SESSION_PAIRS_LIMIT` | `0` | Max pairs per session. `0` = unlimited |
@@ -142,11 +140,12 @@ Additional variables used only by Docker:
 
 Place image files (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.avif`, `.tiff`) in the `./images/` directory.
 
-On server startup, `startup.js` automatically:
-- Registers any new images in the database (with a default ELO of 1500).
-- Generates a 300 px JPEG thumbnail in `./previews/` for each image (used in the results grid and charts).
+On server startup (including every Docker container start/restart), `startup.js` runs **before** the HTTP server accepts traffic:
+- Resizes any image taller than 1500 px in place (same filename/format; smaller images are left unchanged).
+- Registers any new files in `./images/` in the database (default ELO 1500); existing records are kept and dimensions refreshed after compression.
+- Generates or refreshes a 300 px JPEG thumbnail in `./previews/` when the source file is newer than its preview (used in the results grid and login background).
 
-Images already in the database are not re-registered or re-thumbnailed. To reset ratings, drop the `images` collection and restart the server.
+To reset ratings, drop the `images` collection and restart the server.
 
 ---
 

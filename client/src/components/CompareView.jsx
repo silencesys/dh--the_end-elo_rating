@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { preloadImages } from '../utils/preload.js';
+import { preloadImages, isLoaded } from '../utils/preload.js';
 
 const ITI_MS  = 250;  // blank period between pairs – clears visual memory
 const FADE_MS = 80;   // must match CSS transition on .images-container
@@ -46,15 +46,20 @@ export default function CompareView({ pair, timePerComparison, onCompare, onTime
 
     setImagesVisible(false);
 
-    const spinnerTimer = setTimeout(() => {
-      if (runIdRef.current === runId) setShowSpinner(true);
-    }, SPINNER_DELAY_MS);
+    const alreadyReady = urls.every(isLoaded);
+    const spinnerTimer = alreadyReady
+      ? null
+      : setTimeout(() => {
+          if (runIdRef.current === runId) setShowSpinner(true);
+        }, SPINNER_DELAY_MS);
 
     Promise.all([
       preloadImages(urls),
-      new Promise((r) => setTimeout(r, blankMs + FADE_MS)),
+      alreadyReady
+        ? Promise.resolve()
+        : new Promise((r) => setTimeout(r, blankMs + FADE_MS)),
     ]).then(() => {
-      clearTimeout(spinnerTimer);
+      if (spinnerTimer) clearTimeout(spinnerTimer);
       if (runIdRef.current !== runId) return;
 
       setShowSpinner(false);
@@ -62,7 +67,7 @@ export default function CompareView({ pair, timePerComparison, onCompare, onTime
       setTimeLeft(timePerComparison);
     });
 
-    return () => { clearTimeout(spinnerTimer); };
+    return () => { if (spinnerTimer) clearTimeout(spinnerTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair, timePerComparison]);
 

@@ -5,6 +5,7 @@ const multer = require('multer');
 const unzipper = require('unzipper');
 const Image = require('../models/Image');
 const requireApiKey = require('../middleware/requireApiKey');
+const { compressImageFile, generatePreviewsFor } = require('../startup');
 
 const router = Router();
 
@@ -56,7 +57,8 @@ router.post('/', requireApiKey, upload.single('file'), async (req, res) => {
 
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
-  const results = { created: 0, updated: 0, errors: [] };
+  const results = { created: 0, updated: 0, compressed: 0, errors: [] };
+  const written = [];
 
   const jpgEntries = directory.files.filter(
     (f) => f.type === 'File' && /\.jpe?g$/i.test(f.path) && !f.path.startsWith('__MACOSX')
@@ -69,16 +71,21 @@ router.post('/', requireApiKey, upload.single('file'), async (req, res) => {
     try {
       const buf = await entry.buffer();
       fs.writeFileSync(destPath, buf);
+      written.push(filename);
     } catch (err) {
       results.errors.push({ filename, error: `Failed to write file: ${err.message}` });
       continue;
     }
 
+    const { compressed, width: fileWidth, height: fileHeight } =
+      await compressImageFile(filename);
+    if (compressed) results.compressed++;
+
     const meta = metadata[filename] ?? {};
     const doc = {
       name: meta['shelfmark'] ?? filename.replace(/\.[^.]+$/, ''),
-      width: typeof meta['width'] === 'number' ? meta['width'] : null,
-      height: typeof meta['height'] === 'number' ? meta['height'] : null,
+      width: fileWidth ?? (typeof meta['width'] === 'number' ? meta['width'] : null),
+      height: fileHeight ?? (typeof meta['height'] === 'number' ? meta['height'] : null),
       catNo: typeof meta['cat. No.'] === 'number' ? meta['cat. No.'] : null,
       originPlace: meta['origin-place'] ?? null,
       originDate: meta['origin-date'] ?? null,
@@ -104,9 +111,12 @@ router.post('/', requireApiKey, upload.single('file'), async (req, res) => {
     }
   }
 
+  const previewsGenerated = await generatePreviewsFor(written, { force: true });
+
   res.json({
     message: 'Upload complete.',
     total: jpgEntries.length,
+    previewsGenerated,
     ...results,
   });
 });

@@ -6,8 +6,18 @@ import SessionComplete from './components/SessionComplete.jsx';
 import HamburgerMenu from './components/HamburgerMenu.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSession } from './hooks/useSession.js';
-import { getPairKey, pickNextPair } from './utils/pairSelection.js';
-import { preloadImages } from './utils/preload.js';
+import {
+  getPairKey,
+  pickNextPair,
+  advancePicksSinceAnchorPair,
+  picksSinceAnchorPairAfterSelect,
+} from './utils/pairSelection.js';
+import {
+  preloadInitialSession,
+  preloadFromFirstPair,
+  preloadLookahead,
+  pairsAreReady,
+} from './utils/sessionPreload.js';
 
 export default function App() {
   const { images, setImages, config, loading, error, refreshImages } = useAppData();
@@ -22,79 +32,112 @@ export default function App() {
   const [sessionCount, setSessionCount] = useState(0);
   const [sessionComplete, setSessionComplete] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [firstPairReady, setFirstPairReady] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [picksSinceAnchorPair, setPicksSinceAnchorPair] = useState(0);
 
   const sessionIdRef = useRef(sessionId);
+  const loginWarmupRef = useRef(null);
+  const warmupGenRef = useRef(0);
+
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   useEffect(() => {
     setTimerState((prev) => ({ ...prev, total: config.timePerComparison }));
   }, [config.timePerComparison]);
 
+  // While on the login screen, preload the first session queue in the background.
   useEffect(() => {
-    if (!images.length) return;
-    const urls = images.map((img) => `/images/${img.filename}`);
-    const count = config.preloadCount ?? 6;
-    preloadImages(count > 0 ? urls.slice(0, count) : urls);
-  }, [images, config.preloadCount]);
+    if (loading || username || images.length < 2) return;
 
-  const startSession = useCallback(() => {
+    const gen = ++warmupGenRef.current;
+    loginWarmupRef.current = null;
+
+    preloadInitialSession(images, config.preloadCount).then((plan) => {
+      if (warmupGenRef.current !== gen) return;
+      loginWarmupRef.current = plan;
+    });
+  }, [loading, username, images, config.preloadCount]);
+
+  const beginSession = useCallback(
+    async (firstPair, { useWarmupIfMatch = false } = {}) => {
+      setSessionReady(false);
+      if (!firstPair) return null;
+
+      const warmup = loginWarmupRef.current;
+      const warmupMatches =
+        useWarmupIfMatch &&
+        warmup?.firstPair &&
+        getPairKey(warmup.firstPair[0]._id, warmup.firstPair[1]._id) ===
+          getPairKey(firstPair[0]._id, firstPair[1]._id) &&
+        pairsAreReady(warmup.pairs);
+
+      if (!warmupMatches) {
+        const plan = await preloadFromFirstPair(
+          images,
+          firstPair,
+          config.preloadCount
+        );
+        setSessionReady(plan.ready);
+      } else {
+        setSessionReady(true);
+      }
+
+      setPicksSinceAnchorPair(picksSinceAnchorPairAfterSelect(firstPair, 0));
+      setCurrentPair(firstPair);
+      return firstPair;
+    },
+    [images, config.preloadCount]
+  );
+
+  const startSession = useCallback(async () => {
     const emptyRated = new Set();
-    const noLast = [];
-    const first = pickNextPair(images, emptyRated, noLast);
+    const first = pickNextPair(images, emptyRated, [], 0);
     setRatedPairIds(emptyRated);
-    setLastShownIds(noLast);
+    setLastShownIds([]);
     setSessionCount(0);
     setSessionComplete(false);
-    setFirstPairReady(false);
-    setCurrentPair(first);
+    loginWarmupRef.current = null;
+    await beginSession(first);
     openSession(username);
-  }, [images, username, openSession]);
+  }, [images, username, openSession, beginSession]);
 
   useEffect(() => {
-    if (!currentPair || firstPairReady) return;
-    preloadImages([
-      `/images/${currentPair[0].filename}`,
-      `/images/${currentPair[1].filename}`,
-    ]).then(() => setFirstPairReady(true));
-  }, [currentPair, firstPairReady]);
+    if (!currentPair || !images.length || !sessionReady) return;
 
-
-  useEffect(() => {
-    if (!currentPair || !images.length) return;
-    const count = config.preloadCount ?? 6;
-    if (count === 0) return;
-
-    let simRated = new Set(ratedPairIds);
-    simRated.add(getPairKey(currentPair[0]._id, currentPair[1]._id));
-    let simLast = [String(currentPair[0]._id), String(currentPair[1]._id)];
-
-    for (let i = 0; i < count; i++) {
-      const ahead = pickNextPair(images, simRated, simLast);
-      if (!ahead) break;
-      preloadImages([
-        `/images/${ahead[0].filename}`,
-        `/images/${ahead[1].filename}`,
-      ]);
-      simRated.add(getPairKey(ahead[0]._id, ahead[1]._id));
-      simLast = [String(ahead[0]._id), String(ahead[1]._id)];
-    }
-  }, [currentPair, images, ratedPairIds, config.preloadCount]);
+    preloadLookahead(images, {
+      currentPair,
+      ratedPairIds,
+      lastShownIds,
+      picksSinceAnchorPair,
+      preloadCount: config.preloadCount,
+    });
+  }, [
+    currentPair,
+    images,
+    ratedPairIds,
+    lastShownIds,
+    picksSinceAnchorPair,
+    config.preloadCount,
+    sessionReady,
+  ]);
 
   const handleLogin = useCallback(
-    async (name, introShownIds = []) => {
+    async (name) => {
       setUsername(name);
       const emptyRated = new Set();
-      const first = pickNextPair(images, emptyRated, introShownIds);
       setRatedPairIds(emptyRated);
-      setLastShownIds(introShownIds);
+      setLastShownIds([]);
       setSessionCount(0);
       setSessionComplete(false);
-      setFirstPairReady(false);
-      setCurrentPair(first);
+
+      const warmup = loginWarmupRef.current;
+      const first =
+        warmup?.firstPair ?? pickNextPair(images, emptyRated, [], 0);
+
+      await beginSession(first, { useWarmupIfMatch: true });
       await openSession(name);
     },
-    [images, openSession]
+    [images, openSession, beginSession]
   );
 
   const handleCompare = useCallback(
@@ -116,12 +159,18 @@ export default function App() {
       if (!skipped) setImages(updatedImages);
 
       const atLimit = config.sessionPairsLimit > 0 && newCount >= config.sessionPairsLimit;
-      const nextPair = atLimit ? null : pickNextPair(updatedImages, newRated, newLastShown);
+      const streakForPick = advancePicksSinceAnchorPair(currentPair, picksSinceAnchorPair);
+      const nextPair = atLimit
+        ? null
+        : pickNextPair(updatedImages, newRated, newLastShown, streakForPick);
       const isLast = !nextPair;
 
       setRatedPairIds(newRated);
       setLastShownIds(newLastShown);
       setSessionCount(newCount);
+      setPicksSinceAnchorPair(
+        picksSinceAnchorPairAfterSelect(nextPair, streakForPick)
+      );
       setCurrentPair(nextPair);
       setSessionComplete(isLast);
 
@@ -143,9 +192,6 @@ export default function App() {
         })
           .then((r) => r.json())
           .then((result) => {
-            // Server returns batch-recomputed ELO for all images.
-            // Apply the updated ratings immediately into local state so
-            // cards and charts reflect the true post-recompute values.
             if (result?.winner && result?.loser) {
               setImages((prev) => prev.map((img) => {
                 const id = String(img._id);
@@ -156,7 +202,6 @@ export default function App() {
                 return img;
               }));
             }
-            // Full refresh to pick up all other images' recomputed ratings
             refreshImages();
           })
           .catch((err) => console.error('Failed to save comparison:', err));
@@ -164,7 +209,17 @@ export default function App() {
 
       if (isLast) closeSession(sid);
     },
-    [ratedPairIds, images, sessionCount, config.sessionPairsLimit, username, closeSession, refreshImages]
+    [
+      ratedPairIds,
+      images,
+      sessionCount,
+      config.sessionPairsLimit,
+      username,
+      closeSession,
+      refreshImages,
+      currentPair,
+      picksSinceAnchorPair,
+    ]
   );
 
   if (loading) {
@@ -187,10 +242,7 @@ export default function App() {
     return <LoginModal config={config} images={images} onLogin={handleLogin} />;
   }
 
-  // Hold the loading screen until the very first pair is fully preloaded.
-  // On fast networks this is imperceptibly brief; on slow ones it prevents
-  // showing a blank/flicker on that first trial.
-  if (!firstPairReady) {
+  if (!sessionReady) {
     return (
       <div className="loading-screen">
         <div className="spinner" />
