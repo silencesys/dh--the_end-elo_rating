@@ -6,7 +6,12 @@
     "dev": "concurrently -n server,client -c blue,green \"pnpm -C server dev\" \"pnpm -C client dev\"",
     "build": "pnpm -C client build",
     "start": "pnpm -C server start",
-    "migrate": "node scripts/migrate-legacy-sessions.js"
+    "migrate": "node scripts/migrate-legacy-sessions.js",
+    "analyze:connectivity": "node scripts/analyze-connectivity.js",
+    "generate:bridge-pairs": "node scripts/generate-bridge-pairs.js",
+    "seed:bridge-pairs": "node scripts/seed-bridge-pairs.js",
+    "test:graph": "node --test scripts/lib/*.test.js",
+    "test": "node --test scripts/lib/*.test.js scripts/*.test.js server/*.test.js client/src/utils/*.test.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

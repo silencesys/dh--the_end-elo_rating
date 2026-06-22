@@ -17,13 +17,17 @@ import {
   preloadFromFirstPair,
   preloadLookahead,
   pairsAreReady,
+  imageUrlsForPair,
 } from './utils/sessionPreload.js';
+import { preloadImages } from './utils/preload.js';
+import { isBridgeMode, fetchBridgePair } from './utils/bridgeMode.js';
 
 export default function App() {
   const { images, setImages, config, loading, error, refreshImages } = useAppData();
   const { sessionId, openSession, closeSession } = useSession();
 
   const [username, setUsername] = useState(null);
+  const [bridgeMode] = useState(isBridgeMode);
   const [timerState, setTimerState] = useState({ timeLeft: 0, total: 5000, active: false });
 
   const [currentPair, setCurrentPair] = useState(null);
@@ -46,8 +50,9 @@ export default function App() {
   }, [config.timePerComparison]);
 
   // While on the login screen, preload the first session queue in the background.
+  // Skipped in bridge mode — the first pair comes from the server queue on login.
   useEffect(() => {
-    if (loading || username || images.length < 2) return;
+    if (loading || username || images.length < 2 || bridgeMode) return;
 
     const gen = ++warmupGenRef.current;
     loginWarmupRef.current = null;
@@ -56,7 +61,7 @@ export default function App() {
       if (warmupGenRef.current !== gen) return;
       loginWarmupRef.current = plan;
     });
-  }, [loading, username, images, config.preloadCount]);
+  }, [loading, username, images, config.preloadCount, bridgeMode]);
 
   const beginSession = useCallback(
     async (firstPair, { useWarmupIfMatch = false } = {}) => {
@@ -89,20 +94,36 @@ export default function App() {
     [images, config.preloadCount]
   );
 
+  // Bridge mode: preload a single server-provided pair (no local look-ahead queue).
+  const beginBridgeSession = useCallback(async (pair) => {
+    setSessionReady(false);
+    if (pair) await preloadImages(imageUrlsForPair(pair));
+    setCurrentPair(pair);
+    setSessionReady(true);
+  }, []);
+
   const startSession = useCallback(async () => {
-    const emptyRated = new Set();
-    const first = pickNextPair(images, emptyRated, [], 0);
-    setRatedPairIds(emptyRated);
+    setRatedPairIds(new Set());
     setLastShownIds([]);
     setSessionCount(0);
     setSessionComplete(false);
     loginWarmupRef.current = null;
+
+    if (bridgeMode) {
+      const sid = await openSession(username);
+      const { pair, done } = await fetchBridgePair(sid);
+      await beginBridgeSession(pair);
+      setSessionComplete(done);
+      return;
+    }
+
+    const first = pickNextPair(images, new Set(), [], 0);
     await beginSession(first);
     openSession(username);
-  }, [images, username, openSession, beginSession]);
+  }, [images, username, openSession, beginSession, bridgeMode, beginBridgeSession]);
 
   useEffect(() => {
-    if (!currentPair || !images.length || !sessionReady) return;
+    if (!currentPair || !images.length || !sessionReady || bridgeMode) return;
 
     preloadLookahead(images, {
       currentPair,
@@ -119,35 +140,39 @@ export default function App() {
     picksSinceAnchorPair,
     config.preloadCount,
     sessionReady,
+    bridgeMode,
   ]);
 
   const handleLogin = useCallback(
     async (name) => {
       setUsername(name);
-      const emptyRated = new Set();
-      setRatedPairIds(emptyRated);
+      setRatedPairIds(new Set());
       setLastShownIds([]);
       setSessionCount(0);
       setSessionComplete(false);
 
+      if (bridgeMode) {
+        const sid = await openSession(name);
+        const { pair, done } = await fetchBridgePair(sid);
+        await beginBridgeSession(pair);
+        setSessionComplete(done);
+        return;
+      }
+
       const warmup = loginWarmupRef.current;
       const first =
-        warmup?.firstPair ?? pickNextPair(images, emptyRated, [], 0);
+        warmup?.firstPair ?? pickNextPair(images, new Set(), [], 0);
 
       await beginSession(first, { useWarmupIfMatch: true });
       await openSession(name);
     },
-    [images, openSession, beginSession]
+    [images, openSession, beginSession, bridgeMode, beginBridgeSession]
   );
 
   const handleCompare = useCallback(
     async (winnerId, loserId, skipped, meta = {}) => {
-      const key = getPairKey(winnerId, loserId);
-      const newRated = new Set(ratedPairIds);
-      newRated.add(key);
-
-      const newLastShown = [String(winnerId), String(loserId)];
       const newCount = sessionCount + 1;
+      const sid = sessionIdRef.current;
 
       const updatedImages = skipped ? images : images.map((img) => {
         if (String(img._id) === String(winnerId))
@@ -157,6 +182,56 @@ export default function App() {
         return img;
       });
       if (!skipped) setImages(updatedImages);
+      setSessionCount(newCount);
+
+      // Bridge mode: record the vote, then pull the next pair from the server
+      // queue (its quota + this-session exclusion are up to date after the POST).
+      // SESSION_PAIRS_LIMIT is ignored; ending is driven by done:true.
+      if (bridgeMode) {
+        if (skipped) {
+          if (sid) {
+            await fetch(`/api/sessions/${sid}/skip`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ winnerId, loserId, ...meta }),
+            }).catch((err) => console.error('Failed to log skip:', err));
+          }
+        } else {
+          await fetch('/api/compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ winnerId, loserId, username, sessionId: sid, ...meta }),
+          })
+            .then((r) => r.json())
+            .then((result) => {
+              if (result?.winner && result?.loser) {
+                setImages((prev) => prev.map((img) => {
+                  const id = String(img._id);
+                  if (id === String(result.winner.id))
+                    return { ...img, eloRating: result.winner.eloRating };
+                  if (id === String(result.loser.id))
+                    return { ...img, eloRating: result.loser.eloRating };
+                  return img;
+                }));
+              }
+            })
+            .catch((err) => console.error('Failed to save comparison:', err));
+        }
+
+        const { pair, done } = await fetchBridgePair(sid);
+        if (pair) await preloadImages(imageUrlsForPair(pair));
+        setCurrentPair(pair);
+        setLastShownIds(pair ? [String(pair[0]._id), String(pair[1]._id)] : []);
+        setSessionComplete(done);
+        if (done) closeSession(sid);
+        return;
+      }
+
+      const key = getPairKey(winnerId, loserId);
+      const newRated = new Set(ratedPairIds);
+      newRated.add(key);
+
+      const newLastShown = [String(winnerId), String(loserId)];
 
       const atLimit = config.sessionPairsLimit > 0 && newCount >= config.sessionPairsLimit;
       const streakForPick = advancePicksSinceAnchorPair(currentPair, picksSinceAnchorPair);
@@ -167,14 +242,11 @@ export default function App() {
 
       setRatedPairIds(newRated);
       setLastShownIds(newLastShown);
-      setSessionCount(newCount);
       setPicksSinceAnchorPair(
         picksSinceAnchorPairAfterSelect(nextPair, streakForPick)
       );
       setCurrentPair(nextPair);
       setSessionComplete(isLast);
-
-      const sid = sessionIdRef.current;
 
       if (skipped) {
         if (sid) {
@@ -219,6 +291,7 @@ export default function App() {
       refreshImages,
       currentPair,
       picksSinceAnchorPair,
+      bridgeMode,
     ]
   );
 
@@ -283,6 +356,7 @@ export default function App() {
         <SessionComplete
           sessionCount={sessionCount}
           onRestart={startSession}
+          bridge={bridgeMode}
         />
       )}
     </div>
