@@ -34,6 +34,7 @@ WORKDIR /app/server
 
 COPY --from=server-deploy /deploy ./
 COPY --from=client-builder /app/client/dist /app/client/dist
+COPY scripts/ /app/scripts/
 
 RUN mkdir -p /app/images /app/previews
 

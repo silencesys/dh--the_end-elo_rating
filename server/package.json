@@ -1,10 +1,13 @@
 {
   "name": "elo-rating-server",
-  "version": "1.0.2",
+  "version": "1.1.1",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "analyze:connectivity": "node ../scripts/analyze-connectivity.js",
+    "generate:bridge-pairs": "node ../scripts/generate-bridge-pairs.js",
+    "seed:bridge-pairs": "node ../scripts/seed-bridge-pairs.js"
   },
   "dependencies": {
     "archiver": "^7.0.1",
