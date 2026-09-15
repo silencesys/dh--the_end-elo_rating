@@ -55,6 +55,16 @@ Coverage-first scheduling with an **anchor backbone** (`client/src/utils/pairSel
 
 The previous trial’s images are avoided when possible to reduce carry-over bias.
 
+### Bridge mode (`?source=bridge`)
+
+When the comparison graph splits into disconnected cohorts, the global ranking is only
+valid *within* each cohort. Opening the tool with `?source=bridge&username=<name>` drives
+the compare UI from a fixed, pre-computed list of cross-cohort "bridge" pairs (served by
+`GET /api/bridge/next`) instead of the local scheduler — connecting the graph onto one
+scale. Normal sessions are unaffected. See the end-to-end steps in
+[`docs/bridging_dataset.md`](docs/bridging_dataset.md) (generate → seed →
+annotate → verify → export).
+
 ---
 
 ## Project structure
